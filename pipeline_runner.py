@@ -8,7 +8,7 @@ from datetime import datetime
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-PIPELINE_MODEL = os.environ.get("PIPELINE_MODEL", "google/gemini-2.0-flash-exp:free")
+PIPELINE_MODEL = os.environ.get("BOT_MODEL", "google/gemini-2.0-flash-001")
 
 # ─── Contexto da empresa ────────────────────────────────────────────────────
 
