@@ -1,6 +1,7 @@
 import os
 import requests
 import psycopg2
+import base64
 from flask import Flask, request as flask_request
 from dotenv import load_dotenv
 
@@ -11,7 +12,6 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-# Modelo atualizado com o ID CORRETO do OpenRouter
 BOT_MODEL = os.environ.get("BOT_MODEL", "google/gemini-2.0-flash-001")
 
 # Histórico de conversa por chat (em memória)
@@ -27,7 +27,7 @@ SOBRE A BOREAL MÍDIA:
 SEU PAPEL:
 Você ajuda o Rapha a transformar ideias soltas em pautas de conteúdo estruturadas para Instagram, LinkedIn e YouTube.
 
-QUANDO RAPHA MANDAR UMA IDEIA:
+QUANDO RAPHA MANDAR UMA IDEIA (TEXTO OU ÁUDIO):
 1. Identifique o potencial da pauta e mostre empolgação pragmática.
 2. Sugira 1-2 ângulos (escolha entre: Medo/Risco, Oportunidade, Educacional, Contrário, Inspiracional)
 3. Faça UMA pergunta para enriquecer a pauta (dados, contexto, case real)
@@ -69,13 +69,41 @@ def save_to_db(text, msg_id):
         print(f"Erro no banco: {e}")
         return False
 
-def call_openrouter(messages):
+def get_telegram_file_path(file_id):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
+    resp = requests.get(url).json()
+    if resp.get("ok"):
+        return resp["result"]["file_path"]
+    return None
+
+def download_and_encode_audio(file_path):
+    url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+    resp = requests.get(url)
+    if resp.status_code == 200:
+        return base64.b64encode(resp.content).decode("utf-8")
+    return None
+
+def call_openrouter(messages, audio_base64=None):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://railway.app",
         "X-Title": "Boreal Pauta Bot",
     }
+    
+    # Se houver áudio, transformamos a última mensagem em multimodal
+    if audio_base64 and messages[-1]["role"] == "user":
+        last_text = messages[-1]["content"]
+        messages[-1]["content"] = [
+            {"type": "text", "text": last_text if last_text else "Transcreva e analise este áudio conforme seu papel."},
+            {
+                "type": "input_audio",
+                "input_audio": {
+                    "data": audio_base64,
+                    "format": "ogg" # Telegram voice é sempre ogg/opus
+                }
+            }
+        ]
     
     payload = {
         "model": BOT_MODEL,
@@ -88,7 +116,7 @@ def call_openrouter(messages):
         "https://openrouter.ai/api/v1/chat/completions",
         headers=headers,
         json=payload,
-        timeout=30
+        timeout=60 # Aumentado para processamento de áudio
     )
     
     if response.status_code != 200:
@@ -115,10 +143,18 @@ def webhook():
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
     msg_id = message["message_id"]
+    audio_b64 = None
 
-    if not text:
-        if "voice" in message or "audio" in message:
-            send_message(chat_id, "Recebi seu áudio! Vou pedir para o pessoal da Boreal transcrever e te respondo em breve.")
+    # Tratar áudio/voz
+    if not text and "voice" in message:
+        file_id = message["voice"]["file_id"]
+        file_path = get_telegram_file_path(file_id)
+        if file_path:
+            audio_b64 = download_and_encode_audio(file_path)
+            # Para o histórico, o texto do áudio será marcado como vazio para ser preenchido pela transcrição
+            text = "[Mensagem de Voz]"
+
+    if not text and not audio_b64:
         return "ok"
 
     if chat_id not in conversations:
@@ -131,7 +167,8 @@ def webhook():
 
     try:
         reply = call_openrouter(
-            [{"role": "system", "content": SYSTEM_PROMPT}] + conversations[chat_id]
+            [{"role": "system", "content": SYSTEM_PROMPT}] + conversations[chat_id],
+            audio_base64=audio_b64
         )
         
         if "PAUTA CONFIRMADA" in reply:
@@ -141,13 +178,14 @@ def webhook():
         conversations[chat_id].append({"role": "assistant", "content": reply})
         send_message(chat_id, reply)
     except Exception as e:
+        print(f"ERRO WEBHOOK: {e}")
         send_message(chat_id, f"Erro ao processar: {str(e)}")
 
     return "ok"
 
 @app.route("/", methods=["GET"])
 def index():
-    return f"Bot Boreal Mídia (Tiago) rodando com {BOT_MODEL}."
+    return f"Bot Boreal Mídia (Tiago) com Audição Ativa em {BOT_MODEL}."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
