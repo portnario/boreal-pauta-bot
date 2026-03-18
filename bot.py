@@ -17,38 +17,42 @@ BOT_MODEL = os.environ.get("BOT_MODEL", "google/gemini-2.0-flash-001")
 # Histórico de conversa por chat (em memória)
 conversations = {}
 
-SYSTEM_PROMPT = """Você é o assistente de pauta da Boreal Mídia, conversando diretamente com Raphael Ladeira (Rapha), dono da empresa.
+SYSTEM_PROMPT = """Você é a Luma, gerente de pautas e conteúdo da Boreal Mídia. Você é o ponto de contato principal do Raphael Ladeira (Rapha).
+
+SEU TIME (SQUAD BOREAL):
+Você gerencia um time de especialistas que entra em ação assim que você confirma uma pauta:
+1. Pedro Pesquisa: Varre a internet atrás de dados e notícias reais para embasar a pauta.
+2. Ivan Ideia: Cria ganchos criativos e ângulos de retenção.
+3. Isabela Instagram: Cria roteiros de Reels e carrosséis estratégicos.
+4. Lucas LinkedIn: Transforma a pauta em autoridade e posts B2B.
+5. Yago YouTube: Cria roteiros estruturados para vídeos longos.
+6. Vera Veredito: Faz a revisão final de tom de voz "Anti-Guru" e qualidade.
 
 SOBRE A BOREAL MÍDIA:
-- Produtora de performance digital B2B em Itajubá-MG
-- Diferencial: audiovisual de alto impacto + estratégia orientada a resultado de negócio
-- Posicionamento: "a agência que entrega resultado sem romantismo para empresas B2B"
+- Produtora de performance digital B2B em Itajubá-MG.
+- Posicionamento: "Agência que entrega resultado sem romantismo".
+- Público: PMEs de tecnologia, engenharia e educação.
 
-SEU PAPEL:
-Você ajuda o Rapha a transformar ideias soltas em pautas de conteúdo estruturadas para Instagram, LinkedIn e YouTube.
+SEU PAPEL COM O RAPHA:
+Você ajuda o Rapha a refinar ideias. Você é organizada, direta e estratégica.
+- Se ele mandar áudio ou texto, transcreva (se áudio), identifique o potencial e sugira 1-2 ângulos.
+- Use os pilares: Resultado Real, Bastidores, Educação, Mercado B2B ou Tendências.
 
-QUANDO RAPHA MANDAR UMA IDEIA (TEXTO OU ÁUDIO):
-1. Identifique o potencial da pauta e mostre empolgação pragmática.
-2. Sugira 1-2 ângulos (escolha entre: Medo/Risco, Oportunidade, Educacional, Contrário, Inspiracional)
-3. Faça UMA pergunta para enriquecer a pauta (dados, contexto, case real)
-4. Seja direto — respostas curtas, sem enrolação.
-
-QUANDO RAPHA CONFIRMAR UMA PAUTA:
-Envie uma mensagem formatada assim (exatamente):
+QUANDO A PAUTA ESTIVER PRONTA:
+Envie EXATAMENTE este bloco para salvar no sistema e acionar o time:
 
 PAUTA CONFIRMADA
 - Ideia: [descrição]
+- Gerente responsável: Luma
 - Ângulo: [nome do ângulo]
-- Pilar: [Resultado Real | Bastidores | Educação | Mercado B2B | Tendências]
+- Pilar: [Nome do Pilar]
 - Urgência: [alta | média | baixa]
-- Notas: [contexto adicional se houver]
+- Notas para o Time: [ex: Pedro, foque em dados de IA; Isabela, queremos algo visual]
 
-REGRAS DE COMUNICAÇÃO:
-- Respostas curtas (máx 4 parágrafos curtos no Telegram)
-- Tom direto, sem romantismo, sem enrolação
-- Nunca use: segredo, fórmula, viralizar, crescer seguidores
-- Se a ideia for fraca, diga com clareza e proponha reformulação
-- Foque sempre em resultado B2B mensurável"""
+REGRAS:
+- Respostas curtas e executivas.
+- Nunca use termos de "guru" (fórmula, segredo, viralizar).
+- Se a ideia for fraca, diga: "Rapha, como gerente, acho que essa pauta não traz resultado. Que tal irmos por aqui...?" """
 
 def get_db_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -88,19 +92,18 @@ def call_openrouter(messages, audio_base64=None):
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://railway.app",
-        "X-Title": "Boreal Pauta Bot",
+        "X-Title": "Boreal Luma Manager",
     }
     
-    # Se houver áudio, transformamos a última mensagem em multimodal
     if audio_base64 and messages[-1]["role"] == "user":
         last_text = messages[-1]["content"]
         messages[-1]["content"] = [
-            {"type": "text", "text": last_text if last_text else "Transcreva e analise este áudio conforme seu papel."},
+            {"type": "text", "text": last_text if last_text and last_text != "[Mensagem de Voz]" else "Luma, transcreva esse áudio e me dê sua opinião de gerente estrategista."},
             {
                 "type": "input_audio",
                 "input_audio": {
                     "data": audio_base64,
-                    "format": "ogg" # Telegram voice é sempre ogg/opus
+                    "format": "ogg"
                 }
             }
         ]
@@ -116,7 +119,7 @@ def call_openrouter(messages, audio_base64=None):
         "https://openrouter.ai/api/v1/chat/completions",
         headers=headers,
         json=payload,
-        timeout=60 # Aumentado para processamento de áudio
+        timeout=60
     )
     
     if response.status_code != 200:
@@ -135,7 +138,6 @@ def send_message(chat_id, text):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = flask_request.json
-
     if "message" not in data:
         return "ok"
 
@@ -145,13 +147,11 @@ def webhook():
     msg_id = message["message_id"]
     audio_b64 = None
 
-    # Tratar áudio/voz
     if not text and "voice" in message:
         file_id = message["voice"]["file_id"]
         file_path = get_telegram_file_path(file_id)
         if file_path:
             audio_b64 = download_and_encode_audio(file_path)
-            # Para o histórico, o texto do áudio será marcado como vazio para ser preenchido pela transcrição
             text = "[Mensagem de Voz]"
 
     if not text and not audio_b64:
@@ -173,19 +173,19 @@ def webhook():
         
         if "PAUTA CONFIRMADA" in reply:
             save_to_db(reply, msg_id)
-            reply += "\n\n🚀 **Enviado para o Squad Boreal!**"
+            reply += "\n\n✅ **Pauta salva! Acionando Pedro Pesquisa e o time.**"
 
         conversations[chat_id].append({"role": "assistant", "content": reply})
         send_message(chat_id, reply)
     except Exception as e:
         print(f"ERRO WEBHOOK: {e}")
-        send_message(chat_id, f"Erro ao processar: {str(e)}")
+        send_message(chat_id, f"Luma aqui, tive um pequeno problema técnico ao processar: {str(e)}")
 
     return "ok"
 
 @app.route("/", methods=["GET"])
 def index():
-    return f"Bot Boreal Mídia (Tiago) com Audição Ativa em {BOT_MODEL}."
+    return f"Luma (Gerente Boreal) ativa com {BOT_MODEL}."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
