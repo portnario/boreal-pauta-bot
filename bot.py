@@ -8,19 +8,84 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Carrega as variáveis com fallbacks seguros
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+BOT_MODEL = os.environ.get("BOT_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
 
-# Tenta converter o chat_id, se der erro (como 'seu_chat_id_aqui'), usa 0
-raw_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "0")
-try:
-    TELEGRAM_CHAT_ID = int(raw_chat_id)
-except ValueError:
-    TELEGRAM_CHAT_ID = 0
+# Histórico de conversa por chat (em memória)
+conversations = {}
+
+SYSTEM_PROMPT = """Você é o assistente de pauta da Boreal Mídia, conversando diretamente com Raphael Ladeira (Rapha), dono da empresa.
+
+SOBRE A BOREAL MÍDIA:
+- Produtora de performance digital B2B em Itajubá-MG
+- Atende PMEs nos setores de tecnologia, engenharia, energia, educação e pesquisa
+- Diferencial: audiovisual de alto impacto + estratégia orientada a resultado de negócio
+- Posicionamento: "a agência que entrega resultado sem romantismo para empresas B2B"
+
+SEU PAPEL:
+Você ajuda o Rapha a transformar ideias soltas em pautas de conteúdo estruturadas para Instagram, LinkedIn e YouTube.
+
+QUANDO RAPHA MANDAR UMA IDEIA:
+1. Identifique o potencial da pauta
+2. Sugira 1-2 ângulos (escolha entre: Medo/Risco, Oportunidade, Educacional, Contrário, Inspiracional)
+3. Faça UMA pergunta para enriquecer a pauta (dados, contexto, case real)
+4. Seja direto — respostas curtas, sem enrolação
+
+QUANDO RAPHA CONFIRMAR UMA PAUTA:
+Envie uma mensagem formatada assim (exatamente):
+
+PAUTA CONFIRMADA
+- Ideia: [descrição]
+- Ângulo: [nome do ângulo]
+- Pilar: [Resultado Real | Bastidores | Educação | Mercado B2B | Tendências]
+- Urgência: [alta | média | baixa]
+- Notas: [contexto adicional se houver]
+
+REGRAS DE COMUNICAÇÃO:
+- Respostas curtas (máx 4 parágrafos curtos no Telegram)
+- Tom direto, sem romantismo, sem enrolação
+- Nunca use: segredo, fórmula, viralizar, crescer seguidores
+- Se a ideia for fraca, diga com clareza e proponha reformulação
+- Foque sempre em resultado B2B mensurável"""
 
 def get_db_conn():
     return psycopg2.connect(DATABASE_URL)
+
+def save_to_db(text, msg_id):
+    try:
+        conn = get_db_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO pautas (telegram_id, message_text, message_type) VALUES (%s, %s, %s) ON CONFLICT (telegram_id) DO NOTHING",
+            (msg_id, text, "text")
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Erro no banco: {e}")
+        return False
+
+def call_openrouter(messages):
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": BOT_MODEL,
+            "messages": messages,
+            "max_tokens": 500,
+            "temperature": 0.7,
+        },
+        timeout=30
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
 
 def send_message(chat_id, text):
     requests.post(
@@ -38,44 +103,44 @@ def webhook():
 
     message = data["message"]
     chat_id = message["chat"]["id"]
-    
-    # Segurança: Apenas o chat autorizado
-    if TELEGRAM_CHAT_ID != 0 and chat_id != TELEGRAM_CHAT_ID:
+    text = message.get("text", "")
+    msg_id = message["message_id"]
+
+    if not text:
+        if "voice" in message or "audio" in message:
+            send_message(chat_id, "Recebi seu áudio! Vou pedir para o pessoal da Boreal transcrever e te respondo em breve.")
         return "ok"
 
-    msg_id = message["message_id"]
-    text = message.get("text", "")
-    msg_type = "text"
+    # Inicializar histórico
+    if chat_id not in conversations:
+        conversations[chat_id] = []
 
-    if "voice" in message:
-        msg_type = "voice"
-        text = "[Áudio enviado - Aguardando processamento pelo Squad]"
+    conversations[chat_id].append({"role": "user", "content": text})
 
-    # Salva no banco de dados (PostgreSQL no Railway)
+    # Manter apenas as últimas 10 mensagens
+    if len(conversations[chat_id]) > 10:
+        conversations[chat_id] = conversations[chat_id][-10:]
+
     try:
-        conn = get_db_conn()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO pautas (telegram_id, message_text, message_type) VALUES (%s, %s, %s) ON CONFLICT (telegram_id) DO NOTHING",
-            (msg_id, text, msg_type)
+        reply = call_openrouter(
+            [{"role": "system", "content": SYSTEM_PROMPT}] + conversations[chat_id]
         )
-        conn.commit()
-        cur.close()
-        conn.close()
         
-        # Feedback imediato para o Rapha
-        send_message(chat_id, "✅ Ideia capturada! O Squad Boreal já recebeu sua pauta e vai começar a processar. 🚀")
-        
+        # Se a resposta contém "PAUTA CONFIRMADA", salva no banco para o Squad
+        if "PAUTA CONFIRMADA" in reply:
+            save_to_db(reply, msg_id)
+            reply += "\n\n🚀 **Enviado para o Squad Boreal!**"
+
+        conversations[chat_id].append({"role": "assistant", "content": reply})
+        send_message(chat_id, reply)
     except Exception as e:
-        print(f"Erro ao salvar no banco: {e}")
-        # Se for erro no banco, avisa no chat também
-        send_message(chat_id, f"❌ Erro ao capturar pauta no banco: {str(e)}")
+        send_message(chat_id, f"Erro ao processar: {str(e)}")
 
     return "ok"
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Boreal Bot Gateway is active. Ready to connect."
+    return "Bot Boreal Mídia (Tiago) rodando com OpenRouter."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
