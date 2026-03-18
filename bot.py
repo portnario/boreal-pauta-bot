@@ -1,18 +1,12 @@
 import os
 import requests
-from flask import Flask, request
-from openai import OpenAI
+from flask import Flask, request as flask_request
 
 app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 BOT_MODEL = os.environ.get("BOT_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
-
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-)
 
 # Histórico de conversa por chat (em memória)
 conversations = {}
@@ -30,14 +24,14 @@ Você ajuda o Rapha a transformar ideias soltas em pautas de conteúdo estrutura
 
 QUANDO RAPHA MANDAR UMA IDEIA:
 1. Identifique o potencial da pauta
-2. Sugira 1-2 ângulos (escolha entre: Medo/Risco 🔴, Oportunidade 🟢, Educacional 📚, Contrário ↔️, Inspiracional ⭐)
+2. Sugira 1-2 ângulos (escolha entre: Medo/Risco, Oportunidade, Educacional, Contrário, Inspiracional)
 3. Faça UMA pergunta para enriquecer a pauta (dados, contexto, case real)
 4. Seja direto — respostas curtas, sem enrolação
 
 QUANDO RAPHA CONFIRMAR UMA PAUTA:
 Envie uma mensagem formatada assim (exatamente):
 
-📌 PAUTA CONFIRMADA
+PAUTA CONFIRMADA
 - Ideia: [descrição]
 - Ângulo: [nome do ângulo]
 - Pilar: [Resultado Real | Bastidores | Educação | Mercado B2B | Tendências]
@@ -52,18 +46,36 @@ REGRAS DE COMUNICAÇÃO:
 - Foque sempre em resultado B2B mensurável"""
 
 
+def call_openrouter(messages):
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": BOT_MODEL,
+            "messages": messages,
+            "max_tokens": 500,
+            "temperature": 0.7,
+        },
+        timeout=30
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+
 def send_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    })
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={"chat_id": chat_id, "text": text},
+        timeout=10
+    )
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
+    data = flask_request.json
 
     if "message" not in data:
         return "ok"
@@ -73,16 +85,14 @@ def webhook():
     text = message.get("text", "")
 
     if not text:
-        # Áudio ou outro tipo — avisar
         if "voice" in message or "audio" in message:
-            send_message(chat_id, "🎙️ Recebi seu áudio! Por enquanto só processo texto aqui. Manda a ideia por escrito e eu ajudo a estruturar.")
+            send_message(chat_id, "Recebi seu áudio! Por enquanto só processo texto. Manda a ideia por escrito e eu ajudo a estruturar.")
         return "ok"
 
     # Inicializar histórico
     if chat_id not in conversations:
         conversations[chat_id] = []
 
-    # Adicionar mensagem do usuário
     conversations[chat_id].append({"role": "user", "content": text})
 
     # Manter apenas as últimas 10 mensagens
@@ -90,29 +100,20 @@ def webhook():
         conversations[chat_id] = conversations[chat_id][-10:]
 
     try:
-        response = client.chat.completions.create(
-            model=BOT_MODEL,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + conversations[chat_id],
-            max_tokens=500,
-            temperature=0.7,
+        reply = call_openrouter(
+            [{"role": "system", "content": SYSTEM_PROMPT}] + conversations[chat_id]
         )
-
-        reply = response.choices[0].message.content
-
-        # Adicionar resposta ao histórico
         conversations[chat_id].append({"role": "assistant", "content": reply})
-
         send_message(chat_id, reply)
-
     except Exception as e:
-        send_message(chat_id, f"⚠️ Erro ao processar: {str(e)}")
+        send_message(chat_id, f"Erro ao processar: {str(e)}")
 
     return "ok"
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Bot Boreal Mídia rodando ✅"
+    return "Bot Boreal Midia rodando"
 
 
 if __name__ == "__main__":
