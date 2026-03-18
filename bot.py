@@ -4,6 +4,7 @@ import psycopg2
 import base64
 from flask import Flask, request as flask_request
 from dotenv import load_dotenv
+import pipeline_runner
 
 load_dotenv()
 
@@ -157,6 +158,13 @@ def webhook():
     if not text and not audio_b64:
         return "ok"
 
+    # ── Verificar se há pipeline aguardando input ──────────────────────────
+    if text:
+        active_pipeline = pipeline_runner.get_active_pipeline(chat_id)
+        if active_pipeline:
+            pipeline_runner.resume_pipeline(chat_id, active_pipeline, text)
+            return "ok"
+
     if chat_id not in conversations:
         conversations[chat_id] = []
 
@@ -173,7 +181,7 @@ def webhook():
         
         if "PAUTA CONFIRMADA" in reply:
             save_to_db(reply, msg_id)
-            reply += "\n\n✅ **Pauta salva! Acionando Pedro Pesquisa e o time.**"
+            pipeline_runner.trigger_pipeline(chat_id, pipeline_runner.parse_pauta(reply))
 
         conversations[chat_id].append({"role": "assistant", "content": reply})
         send_message(chat_id, reply)
