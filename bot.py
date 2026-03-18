@@ -11,7 +11,8 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-BOT_MODEL = os.environ.get("BOT_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+# Modelo atualizado conforme escolha do usuário
+BOT_MODEL = os.environ.get("BOT_MODEL", "google/gemini-flash-1.5")
 
 # Histórico de conversa por chat (em memória)
 conversations = {}
@@ -20,7 +21,6 @@ SYSTEM_PROMPT = """Você é o assistente de pauta da Boreal Mídia, conversando 
 
 SOBRE A BOREAL MÍDIA:
 - Produtora de performance digital B2B em Itajubá-MG
-- Atende PMEs nos setores de tecnologia, engenharia, energia, educação e pesquisa
 - Diferencial: audiovisual de alto impacto + estratégia orientada a resultado de negócio
 - Posicionamento: "a agência que entrega resultado sem romantismo para empresas B2B"
 
@@ -28,10 +28,10 @@ SEU PAPEL:
 Você ajuda o Rapha a transformar ideias soltas em pautas de conteúdo estruturadas para Instagram, LinkedIn e YouTube.
 
 QUANDO RAPHA MANDAR UMA IDEIA:
-1. Identifique o potencial da pauta
+1. Identifique o potencial da pauta e mostre empolgação pragmática.
 2. Sugira 1-2 ângulos (escolha entre: Medo/Risco, Oportunidade, Educacional, Contrário, Inspiracional)
 3. Faça UMA pergunta para enriquecer a pauta (dados, contexto, case real)
-4. Seja direto — respostas curtas, sem enrolação
+4. Seja direto — respostas curtas, sem enrolação.
 
 QUANDO RAPHA CONFIRMAR UMA PAUTA:
 Envie uma mensagem formatada assim (exatamente):
@@ -70,20 +70,31 @@ def save_to_db(text, msg_id):
         return False
 
 def call_openrouter(messages):
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://railway.app",  # Recomendado pelo OpenRouter
+        "X-Title": "Boreal Pauta Bot",           # Recomendado pelo OpenRouter
+    }
+    
+    payload = {
+        "model": BOT_MODEL,
+        "messages": messages,
+        "max_tokens": 1000,
+        "temperature": 0.7,
+    }
+    
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": BOT_MODEL,
-            "messages": messages,
-            "max_tokens": 500,
-            "temperature": 0.7,
-        },
+        headers=headers,
+        json=payload,
         timeout=30
     )
+    
+    # Debug logs para o Railway (ajuda a diagnosticar erros no console)
+    if response.status_code != 200:
+        print(f"OPENROUTER ERROR: {response.status_code} - {response.text}")
+        
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
@@ -117,7 +128,7 @@ def webhook():
 
     conversations[chat_id].append({"role": "user", "content": text})
 
-    # Manter apenas as últimas 10 mensagens
+    # Manter apenas as últimas 10 conversas para economizar tokens
     if len(conversations[chat_id]) > 10:
         conversations[chat_id] = conversations[chat_id][-10:]
 
@@ -140,7 +151,7 @@ def webhook():
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Bot Boreal Mídia (Tiago) rodando com OpenRouter."
+    return f"Bot Boreal Mídia (Tiago) rodando com {BOT_MODEL}."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
