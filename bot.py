@@ -8,9 +8,16 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Carrega as variáveis com fallbacks seguros
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-TELEGRAM_CHAT_ID = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
+
+# Tenta converter o chat_id, se der erro (como 'seu_chat_id_aqui'), usa 0
+raw_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "0")
+try:
+    TELEGRAM_CHAT_ID = int(raw_chat_id)
+except ValueError:
+    TELEGRAM_CHAT_ID = 0
 
 def get_db_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -33,7 +40,7 @@ def webhook():
     chat_id = message["chat"]["id"]
     
     # Segurança: Apenas o chat autorizado
-    if chat_id != TELEGRAM_CHAT_ID:
+    if TELEGRAM_CHAT_ID != 0 and chat_id != TELEGRAM_CHAT_ID:
         return "ok"
 
     msg_id = message["message_id"]
@@ -61,13 +68,14 @@ def webhook():
         
     except Exception as e:
         print(f"Erro ao salvar no banco: {e}")
-        send_message(chat_id, f"❌ Erro ao capturar pauta: {str(e)}")
+        # Se for erro no banco, avisa no chat também
+        send_message(chat_id, f"❌ Erro ao capturar pauta no banco: {str(e)}")
 
     return "ok"
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Boreal Bot Gateway is active and connected to Postgres."
+    return "Boreal Bot Gateway is active. Ready to connect."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
