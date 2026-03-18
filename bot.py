@@ -11,8 +11,8 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-# Modelo atualizado conforme escolha do usuário
-BOT_MODEL = os.environ.get("BOT_MODEL", "google/gemini-flash-1.5")
+# Modelo atualizado com o ID CORRETO do OpenRouter
+BOT_MODEL = os.environ.get("BOT_MODEL", "google/gemini-2.0-flash-001")
 
 # Histórico de conversa por chat (em memória)
 conversations = {}
@@ -73,8 +73,8 @@ def call_openrouter(messages):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://railway.app",  # Recomendado pelo OpenRouter
-        "X-Title": "Boreal Pauta Bot",           # Recomendado pelo OpenRouter
+        "HTTP-Referer": "https://railway.app",
+        "X-Title": "Boreal Pauta Bot",
     }
     
     payload = {
@@ -91,7 +91,6 @@ def call_openrouter(messages):
         timeout=30
     )
     
-    # Debug logs para o Railway (ajuda a diagnosticar erros no console)
     if response.status_code != 200:
         print(f"OPENROUTER ERROR: {response.status_code} - {response.text}")
         
@@ -122,13 +121,11 @@ def webhook():
             send_message(chat_id, "Recebi seu áudio! Vou pedir para o pessoal da Boreal transcrever e te respondo em breve.")
         return "ok"
 
-    # Inicializar histórico
     if chat_id not in conversations:
         conversations[chat_id] = []
 
     conversations[chat_id].append({"role": "user", "content": text})
 
-    # Manter apenas as últimas 10 conversas para economizar tokens
     if len(conversations[chat_id]) > 10:
         conversations[chat_id] = conversations[chat_id][-10:]
 
@@ -137,7 +134,6 @@ def webhook():
             [{"role": "system", "content": SYSTEM_PROMPT}] + conversations[chat_id]
         )
         
-        # Se a resposta contém "PAUTA CONFIRMADA", salva no banco para o Squad
         if "PAUTA CONFIRMADA" in reply:
             save_to_db(reply, msg_id)
             reply += "\n\n🚀 **Enviado para o Squad Boreal!**"
