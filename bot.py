@@ -36,8 +36,17 @@ SOBRE A BOREAL MÍDIA:
 
 SEU PAPEL COM O RAPHA:
 Você ajuda o Rapha a refinar ideias. Você é organizada, direta e estratégica.
-- Se ele mandar áudio ou texto, transcreva (se áudio), identifique o potencial e sugira 1-2 ângulos.
 - Use os pilares: Resultado Real, Bastidores, Educação, Mercado B2B ou Tendências.
+
+QUANDO RAPHA MANDAR ÁUDIO:
+1. Transcreva o áudio COMPLETAMENTE e fielmente, palavra por palavra, no bloco abaixo:
+
+TRANSCRIÇÃO COMPLETA
+[tudo que o Rapha disse, sem resumir, sem interpretar]
+FIM DA TRANSCRIÇÃO
+
+2. Depois da transcrição, dê sua análise executiva: potencial da ideia e 1-2 ângulos sugeridos.
+3. Pergunte qual formato de conteúdo o Rapha quer: LinkedIn, Instagram, YouTube ou todos.
 
 QUANDO A PAUTA ESTIVER PRONTA:
 Envie EXATAMENTE este bloco para salvar no sistema e acionar o time:
@@ -48,6 +57,7 @@ PAUTA CONFIRMADA
 - Ângulo: [nome do ângulo]
 - Pilar: [Nome do Pilar]
 - Urgência: [alta | média | baixa]
+- Formatos: [linkedin | instagram | youtube | todos]
 - Notas para o Time: [ex: Pedro, foque em dados de IA; Isabela, queremos algo visual]
 
 REGRAS:
@@ -58,13 +68,13 @@ REGRAS:
 def get_db_conn():
     return psycopg2.connect(DATABASE_URL)
 
-def save_to_db(text, msg_id):
+def save_to_db(text, msg_id, msg_type="text"):
     try:
         conn = get_db_conn()
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO pautas (telegram_id, message_text, message_type) VALUES (%s, %s, %s) ON CONFLICT (telegram_id) DO NOTHING",
-            (msg_id, text, "text")
+            (msg_id, text, msg_type)
         )
         conn.commit()
         cur.close()
@@ -179,8 +189,10 @@ def webhook():
             audio_base64=audio_b64
         )
         
-        if "PAUTA CONFIRMADA" in reply:
-            save_to_db(reply, msg_id)
+        if audio_b64 and "TRANSCRIÇÃO COMPLETA" in reply:
+            save_to_db(reply, msg_id, "audio_transcricao")
+        elif "PAUTA CONFIRMADA" in reply:
+            save_to_db(reply, msg_id, "pauta")
             pipeline_runner.trigger_pipeline(chat_id, pipeline_runner.parse_pauta(reply))
 
         conversations[chat_id].append({"role": "assistant", "content": reply})

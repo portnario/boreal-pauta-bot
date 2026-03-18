@@ -349,6 +349,7 @@ def start_pipeline(chat_id, pauta_data):
         save_pipeline_state(run_id, chat_id, "angle-checkpoint", "waiting_input", {
             "pauta_text": pauta_text,
             "pauta_data": pauta_data,
+            "formatos": pauta_data.get("formatos", ["linkedin", "instagram", "youtube"]),
             "research": research,
             "angles": angles
         })
@@ -377,18 +378,23 @@ def resume_pipeline(chat_id, pipeline_state, user_input):
         )
 
         try:
-            # Content creation — sequencial para evitar rate limit
-            send_message(chat_id, "📸 Isabela criando Instagram...")
-            instagram = step_instagram(pauta_text, angle_context)
-            send_message(chat_id, f"📸 INSTAGRAM — Isabela:\n\n{instagram}")
+            formatos = state.get("formatos", ["linkedin", "instagram", "youtube"])
 
-            send_message(chat_id, "💼 Lucas criando LinkedIn...")
-            linkedin = step_linkedin(pauta_text, angle_context)
-            send_message(chat_id, f"💼 LINKEDIN — Lucas:\n\n{linkedin}")
+            # Content creation — só roda os agentes dos formatos selecionados
+            if "instagram" in formatos:
+                send_message(chat_id, "📸 Isabela criando Instagram...")
+                instagram = step_instagram(pauta_text, angle_context)
+                send_message(chat_id, f"📸 INSTAGRAM — Isabela:\n\n{instagram}")
 
-            send_message(chat_id, "🎬 Yago criando roteiro YouTube...")
-            youtube = step_youtube(pauta_text, angle_context)
-            send_message(chat_id, f"🎬 YOUTUBE — Yago:\n\n{youtube}")
+            if "linkedin" in formatos:
+                send_message(chat_id, "💼 Lucas criando LinkedIn...")
+                linkedin = step_linkedin(pauta_text, angle_context)
+                send_message(chat_id, f"💼 LINKEDIN — Lucas:\n\n{linkedin}")
+
+            if "youtube" in formatos:
+                send_message(chat_id, "🎬 Yago criando roteiro YouTube...")
+                youtube = step_youtube(pauta_text, angle_context)
+                send_message(chat_id, f"🎬 YOUTUBE — Yago:\n\n{youtube}")
 
             send_message(chat_id,
                 "✅ Pipeline concluído!\n\n"
@@ -406,11 +412,12 @@ def resume_pipeline(chat_id, pipeline_state, user_input):
 def parse_pauta(text):
     """Extrai dados estruturados do bloco PAUTA CONFIRMADA."""
     import re
-    pauta = {"text": text, "raw": text}
+    pauta = {"text": text, "raw": text, "formatos": ["linkedin", "instagram", "youtube"]}
     idea_match = re.search(r"-\s*Ideia:\s*(.+)", text)
     angle_match = re.search(r"-\s*[AÂ]ngulo:\s*(.+)", text)
     pilar_match = re.search(r"-\s*Pilar:\s*(.+)", text)
     urgency_match = re.search(r"-\s*Urg[eê]ncia:\s*(.+)", text)
+    formatos_match = re.search(r"-\s*Formatos:\s*(.+)", text, re.IGNORECASE)
     notes_match = re.search(r"-\s*Notas.*?:\s*(.+)", text)
     if idea_match:
         pauta["text"] = idea_match.group(1).strip()
@@ -422,6 +429,14 @@ def parse_pauta(text):
         pauta["urgency"] = urgency_match.group(1).strip()
     if notes_match:
         pauta["notes"] = notes_match.group(1).strip()
+    if formatos_match:
+        raw_formatos = formatos_match.group(1).strip().lower()
+        if "todos" in raw_formatos:
+            pauta["formatos"] = ["linkedin", "instagram", "youtube"]
+        else:
+            pauta["formatos"] = [f for f in ["linkedin", "instagram", "youtube"] if f in raw_formatos]
+        if not pauta["formatos"]:
+            pauta["formatos"] = ["linkedin", "instagram", "youtube"]
     return pauta
 
 
